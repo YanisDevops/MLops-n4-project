@@ -1,0 +1,33 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: {{ include "ml-serving.name" . }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    serviceAccountName: {{ include "ml-serving.serviceAccountName" . }}
+    minReplicas: {{ .Values.autoscaling.minReplicas }}
+    maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+    scaleTarget: {{ .Values.autoscaling.targetUtilizationPercentage }}
+    containers:
+      - name: kserve-container
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        envFrom:
+          - configMapRef:
+              name: {{ include "ml-serving.name" . }}-config
+        ports:
+          - name: http1
+            containerPort: 8080
+            protocol: TCP
+        readinessProbe:
+          httpGet: {path: /v1/models/taxi-duration, port: 8080}
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+    {{- if .Values.canary.enabled }}
+    canaryTrafficPercent: {{ .Values.canary.trafficPercent }}
+    {{- end }}

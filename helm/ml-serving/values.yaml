@@ -1,0 +1,28 @@
+image:
+  repository: "590183937685.dkr.ecr.us-east-1.amazonaws.com/mlops-n4-predictor"
+  tag: "replace-with-git-sha"
+  pullPolicy: IfNotPresent
+
+model:
+  name: TaxiDurationXGB
+  alias: candidate  # champion
+  version: ""
+  trackingUri: "http://mlflow.mlops-platform.svc.cluster.local:5000"
+
+serviceAccount:
+  create: true
+  name: taxi-duration-predictor
+  annotations: {}
+
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: 500m, memory: 512Mi}
+
+autoscaling:
+  minReplicas: 1
+  maxReplicas: 2
+  targetUtilizationPercentage: 70
+
+canary:
+  enabled: false
+  trafficPercent: 10

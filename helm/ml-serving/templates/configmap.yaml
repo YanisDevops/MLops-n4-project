@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ml-serving.name" . }}-config
+  namespace: {{ .Release.Namespace }}
+data:
+  MLFLOW_TRACKING_URI: {{ .Values.model.trackingUri | quote }}
+  MODEL_NAME: {{ .Values.model.name | quote }}
+  MODEL_ALIAS: {{ .Values.model.alias | quote }}
+  MODEL_VERSION: {{ .Values.model.version | quote }}

@@ -1,0 +1,16 @@
+.env
+.git
+.github
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+data
+dist
+build
+tests
+artifacts
+infra
+k8s
+helm
+training

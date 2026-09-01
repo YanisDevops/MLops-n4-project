@@ -1,0 +1,135 @@
+name: CI/CD AWS EKS
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Autoriser le push ECR et le déploiement EKS
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: mlops-n4-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'mlops-n4-predictor' }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'mlops-n4' }}
+  HELM_RELEASE: taxi-duration
+  K8S_NAMESPACE: ml-serving
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  quality:
+    name: 1 - Tests Python
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Vérifier la syntaxe
+        run: python -m compileall -q src training tests
+      - name: Exécuter les tests
+        run: pytest -q
+
+  helm:
+    name: 2 - Validation Helm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint et rendu des manifests
+        run: |
+          helm lint helm/ml-serving -f helm/ml-serving/values-prod.yaml \
+            --set-string image.tag="$IMAGE_TAG"
+          helm template "$HELM_RELEASE" helm/ml-serving \
+            --namespace "$K8S_NAMESPACE" \
+            -f helm/ml-serving/values-prod.yaml \
+            --set-string image.tag="$IMAGE_TAG" \
+            > /tmp/rendered.yaml
+
+  image:
+    name: 3 - Validation image Docker
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construire sans publier
+        run: docker build --pull -t "predictor:$IMAGE_TAG" .
+
+  production:
+    name: 4 - Push ECR et déploiement EKS
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: [quality, helm, image]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authentification AWS temporaire avec OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-${{ github.run_id }}
+      - name: Vérifier AWS, ECR et EKS
+        run: |
+          aws sts get-caller-identity
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region "$AWS_REGION"
+          test "$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.status' --output text)" = ACTIVE
+      - name: Connexion ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Construire et pousser le Git SHA
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build --pull -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-helm@v4
+      - name: Configurer l'accès EKS
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+          kubectl get namespace "$K8S_NAMESPACE"
+          kubectl api-resources --api-group=serving.kserve.io | grep -q InferenceService
+      - name: Déployer avec Helm
+        run: |
+          IMAGE_REPOSITORY="${IMAGE_URI%:*}"
+          helm upgrade --install "$HELM_RELEASE" helm/ml-serving \
+            --namespace "$K8S_NAMESPACE" \
+            -f helm/ml-serving/values-prod.yaml \
+            --set-string image.repository="$IMAGE_REPOSITORY" \
+            --set-string image.tag="$IMAGE_TAG" \
+            --atomic --wait --timeout 10m
+      - name: Vérifier KServe
+        run: |
+          kubectl -n "$K8S_NAMESPACE" wait --for=condition=Ready \
+            inferenceservice/taxi-duration --timeout=10m
+          kubectl -n "$K8S_NAMESPACE" get inferenceservice taxi-duration -o wide
+          kubectl -n "$K8S_NAMESPACE" get pods -o wide
+      - name: Diagnostics en cas d'échec
+        if: failure()
+        run: |
+          kubectl -n "$K8S_NAMESPACE" describe inferenceservice taxi-duration || true
+          kubectl -n "$K8S_NAMESPACE" get events --sort-by=.lastTimestamp | tail -n 50 || true

@@ -1,0 +1,48 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: mlops-n4 # configurable: keep in sync with CLUSTER_NAME
+  region: us-east-1
+  version: "1.34"
+
+iam:
+  withOIDC: true
+
+vpc:
+  nat:
+    gateway: Disable
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+
+managedNodeGroups:
+  - name: mlops-workers
+    instanceType: t3.medium
+    minSize: 1
+    desiredCapacity: 2
+    maxSize: 2
+    privateNetworking: false
+    volumeType: gp3
+    volumeSize: 30
+    labels:
+      workload: mlops
+    tags:
+      project: mlops-n4
+    updateConfig:
+      maxUnavailable: 1
+    iam:
+      withAddonPolicies:
+        ebs: true
+
+addons:
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true
+
+cloudWatch:
+  clusterLogging:
+    enableTypes: []

@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.joblib
+data/
+dist/
+build/
+.DS_Store
+secret.yaml
+*.pem
