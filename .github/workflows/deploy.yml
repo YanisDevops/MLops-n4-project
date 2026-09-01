@@ -37,7 +37,8 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install -r requirements.txt
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt pytest
       - name: Vérifier la syntaxe
         run: python -m compileall -q src training tests
       - name: Exécuter les tests
@@ -111,7 +112,6 @@ jobs:
       - name: Configurer l'accès EKS
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
-          kubectl get namespace "$K8S_NAMESPACE"
           kubectl api-resources --api-group=serving.kserve.io | grep -q InferenceService
       - name: Déployer avec Helm
         run: |
